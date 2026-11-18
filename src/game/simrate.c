@@ -210,22 +210,55 @@ static void keep_time(uint32_t t, float from, float to)
         MEM32(t + 0xC) = (uint32_t)ceil((double)c * from / to - 1e-6);
 }
 
+/*
+ * The step a timer holds for the step global `g`. A timer in slow motion
+ * holds g / its divisor (+ 0x18, 1 at the set-up): sub_001B5B60 stores
+ * [0x49C120] / + 0x18 in + 0x1C when the asked divisor (+ 0x24) changes.
+ * The race clock (timer 0x60EA00, its time 0x60EA20) gets 3, 4 or 5 during
+ * the takedown and crash slow motion (sub_00118410). Matched on g alone, a
+ * freeze in slow motion (the signature takedown's photos, a pause during a
+ * crash) left the clock's count as it was while the global went from 1/N to
+ * 1/60: the race clock jumped N/60 times ahead (40 s -> 113 s at 170 Hz),
+ * past a timed event's deadline (player + 0x1350, race clock seconds), and
+ * the event ended on "time up" at once. Same float division as the title's
+ * (divss), so the match is exact.
+ */
+static float timer_step(uint32_t t, float g)
+{
+    int32_t d = (int32_t)MEM32(t + 0x18);
+
+    return d > 1 && d <= 64 ? g / (float)d : g;
+}
+
+/* Every timer holding `from` (or from / its divisor) gets `to` (to / its
+ * divisor), and its count keeps its time when the global changes too. */
+static int retime_timers(float from, float to, int global)
+{
+    int i, n = 0;
+
+    for (i = 0; i < s_ntimers; i++) {
+        uint32_t t = s_timers[i];
+        if (MEMF(t + 0x1C) == timer_step(t, from)) {
+            MEMF(t + 0x1C) = timer_step(t, to);
+            if (global && from != to)
+                keep_time(t, from, to);
+            n++;
+        }
+    }
+    return n;
+}
+
 /* The step globals and every timer holding `from` get `to`. */
 static void retime(float from, float to, uint32_t to_ms)
 {
-    int i, global = 0;
+    int global = 0;
 
     if (MEMF(STEP_S_G) == from) {
         MEMF(STEP_S_G) = to;
         MEM32(STEP_MS_G) = to_ms;
         global = 1;
     }
-    for (i = 0; i < s_ntimers; i++)
-        if (MEMF(s_timers[i] + 0x1C) == from) {
-            MEMF(s_timers[i] + 0x1C) = to;
-            if (global)
-                keep_time(s_timers[i], from, to);
-        }
+    retime_timers(from, to, global);
 }
 
 static void regime(int on);
@@ -288,7 +321,7 @@ void bo3_sim_before_update(void)
 static void regime(int on)
 {
     float from, to;
-    int i, n = 0;
+    int i, n;
 
     if (on == s_short)
         return;
@@ -304,13 +337,7 @@ static void regime(int on)
     to = on ? 1.0f / (float)s_hz : s_title_step;
     MEMF(STEP_S_G) = to;
     MEM32(STEP_MS_G) = on ? short_ms() : s_title_ms;
-    for (i = 0; i < s_ntimers; i++)
-        if (MEMF(s_timers[i] + 0x1C) == from) {
-            MEMF(s_timers[i] + 0x1C) = to;
-            if (from != to)
-                keep_time(s_timers[i], from, to);
-            n++;
-        }
+    n = retime_timers(from, to, 1);
     s_short = on;
     s_was_frozen = 0;                   /* the step globals and timers hold `to` now, frozen or not */
     fprintf(stderr, "[SIMRATE] %s: step %.6f -> %.6f s, %d of %d timers\n", on ? "on" : "off", from, to,

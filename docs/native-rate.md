@@ -129,6 +129,14 @@ animating at the display's rate meanwhile.
   the pause menu: a race restarted from there opened its page "in the
   future", never took its intro down at the GO, later pages piled on it,
   and the game could crash in the front end some races later.
+- A timer in slow motion holds the step global over its divisor
+  (`sub_001B5B60`: + 0x1C = step / + 0x18), so it is matched and rewritten
+  as that too. The race clock (`0x60EA00`, time `0x60EA20`) is slowed by 3,
+  4 or 5 in the takedown and crash slow motion (`sub_00118410`); matched on
+  the step alone, a freeze in slow motion (the signature takedown's photos,
+  a pause during a crash) left its count as it was, the clock jumped N/60
+  times ahead and a timed event passed its deadline (player + 0x1350, in
+  race clock seconds): it ended on "time up" at once.
 - A scene's own period (the front end asks for 1/30 s) is replaced by 1/N:
   High refresh decides the steps everywhere the short step is in force, so
   the stepper's count is not used there.
